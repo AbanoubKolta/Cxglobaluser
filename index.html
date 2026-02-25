@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>تطبيق موظفي CXglobal - نظام الحضور الذكي</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root { 
+            --primary: #4f46e5; 
+            --secondary: #10b981; 
+            --danger: #ef4444;
+            --bg: #f3f4f6; 
+        }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); margin: 0; display: flex; flex-direction: column; height: 100vh; align-items: center; justify-content: center; }
+        .app-card { width: 85%; max-width: 400px; background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; }
+        input { width: 100%; padding: 15px; margin: 10px 0; border: 2px solid #ddd; border-radius: 10px; box-sizing: border-box; font-size: 1rem; text-align: center; }
+        .btn { width: 100%; padding: 15px; border: none; border-radius: 10px; font-size: 1.1rem; font-weight: bold; cursor: pointer; transition: 0.3s; margin-top: 10px; }
+        .btn-reg { background: var(--primary); color: white; }
+        
+        .btn-check { 
+            height: 160px; width: 160px; border-radius: 50%; 
+            font-size: 1.1rem; margin: 25px auto; display: block; 
+            border: 8px solid #f8fafc; color: white;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .btn-in { background: var(--secondary); }
+        .btn-out { background: var(--danger); }
+        
+        .btn-check:active { transform: scale(0.95); }
+        .btn-check:disabled { background: #94a3b8 !important; cursor: not-allowed; }
+        
+        .hidden { display: none; }
+        #status { margin-top: 20px; font-weight: bold; line-height: 1.5; font-size: 0.95rem; min-height: 3em; }
+        .info-text { color: #666; font-size: 0.85rem; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="app-card" id="reg-screen">
+    <i class="fas fa-user-shield" style="font-size: 3rem; color: var(--primary);"></i>
+    <h2>تسجيل الدخول</h2>
+    <p class="info-text">أدخل رقم هاتفك للمتابعة</p>
+    <input type="text" id="name" placeholder="الاسم الكامل (للموظف الجديد)">
+    <input type="tel" id="phone" placeholder="رقم الهاتف">
+    <button class="btn btn-reg" id="reg-btn" onclick="handleAuth()">دخول / تسجيل</button>
+</div>
+
+<div class="app-card hidden" id="main-screen">
+    <h2 id="welcome-msg">أهلاً بك</h2>
+    <p id="current-state-text" style="font-size: 0.9rem; color: #666;">جاري التحقق من الحالة...</p>
+    
+    <button class="btn btn-check" id="checkin-btn" onclick="handleAttendance()" disabled>
+        <i class="fas fa-fingerprint" style="font-size: 2.5rem;"></i><br>
+        <span>انتظر...</span>
+    </button>
+
+    <div id="status"></div>
+    
+    <button onclick="logout()" style="background:none; border:none; color: #999; margin-top: 20px; cursor: pointer; text-decoration: underline;">تسجيل الخروج</button>
+</div>
+
+<script>
+    const S_URL = "https://krgnxnlnyrggxlxbkxzc.supabase.co";
+    const S_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtyZ254bmxueXJnZ3hseGJreHpjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwNTY2MzUsImV4cCI6MjA4NTYzMjYzNX0.MYU3cb95tT0YFr7q71cB_8p7It0_TyprCUnliMEPuvg";
+    const sb = supabase.createClient(S_URL, S_KEY);
+
+    let currentAction = "IN";
+
+    window.onload = () => {
+        const savedEmp = localStorage.getItem('cx_emp');
+        if (savedEmp) showMainScreen(JSON.parse(savedEmp));
+    };
+
+    async function handleAuth() {
+        const name = document.getElementById('name').value;
+        const phone = document.getElementById('phone').value;
+        const regBtn = document.getElementById('reg-btn');
+        if (!phone) return alert("يرجى إدخال رقم الهاتف");
+        regBtn.disabled = true;
+        regBtn.innerText = "جاري التحقق...";
+        try {
+            const { data: existingEmp, error } = await sb.from('employees').select('*').eq('phone', phone).maybeSingle();
+            if (existingEmp) {
+                saveAndShow(existingEmp);
+            } else {
+                if (!name) { alert("يرجى كتابة الاسم للتسجيل لأول مرة"); regBtn.disabled = false; return; }
+                const { data: newEmp } = await sb.from('employees').insert([{ name, phone }]).select().single();
+                saveAndShow(newEmp);
+            }
+        } catch (err) { alert("خطأ: " + err.message); regBtn.disabled = false; }
+    }
+
+    function saveAndShow(emp) {
+        localStorage.setItem('cx_emp', JSON.stringify(emp));
+        showMainScreen(emp);
+    }
+
+    async function showMainScreen(emp) {
+        document.getElementById('reg-screen').classList.add('hidden');
+        document.getElementById('main-screen').classList.remove('hidden');
+        document.getElementById('welcome-msg').innerText = "أهلاً " + emp.name;
+        await refreshStatus();
+    }
+
+    async function refreshStatus() {
+        const emp = JSON.parse(localStorage.getItem('cx_emp'));
+        const btn = document.getElementById('checkin-btn');
+        const stateText = document.getElementById('current-state-text');
+        const today = new Date().toISOString().split('T')[0];
+
+        const { data } = await sb.from('attendance').select('type')
+            .eq('employee_id', emp.id)
+            .gte('created_at', today + 'T00:00:00')
+            .order('created_at', { ascending: false }).limit(1);
+
+        if (data && data.length > 0 && data[0].type === 'IN') {
+            currentAction = "OUT";
+            btn.className = "btn btn-check btn-out";
+            btn.innerHTML = '<i class="fas fa-sign-out-alt" style="font-size: 2.5rem;"></i><br>تسجيل انصراف';
+            stateText.innerHTML = "الحالة: <b style='color:green;'>داخل العمل</b>";
+        } else {
+            currentAction = "IN";
+            btn.className = "btn btn-check btn-in";
+            btn.innerHTML = '<i class="fas fa-fingerprint" style="font-size: 2.5rem;"></i><br>تسجيل حضور';
+            stateText.innerHTML = "الحالة: <b style='color:red;'>خارج العمل</b>";
+        }
+        btn.disabled = false;
+    }
+
+    async function handleAttendance() {
+        const statusDiv = document.getElementById('status');
+        const btn = document.getElementById('checkin-btn');
+        const now = new Date();
+        const hour = now.getHours();
+        const minutes = now.getMinutes();
+
+        btn.disabled = true;
+        statusDiv.innerText = "جاري تحديد الموقع...";
+
+        let attendanceNote = "";
+        if (currentAction === "IN") {
+        if (hour > 9 || (hour === 9 && minutes >= 30)) {
+            attendanceNote = "متأخر (تسجيل بعد الـ 09:30 صباحاً)";
+        }
+    }
+        navigator.geolocation.getCurrentPosition(async (pos) => {
+            const emp = JSON.parse(localStorage.getItem('cx_emp'));
+            
+            const { error } = await sb.from('attendance').insert({
+                employee_id: emp.id,
+                employee_name: emp.name,
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+                type: currentAction,
+                notes: attendanceNote
+            });
+
+            if (!error) {
+                let displayMsg = currentAction === "IN" ? "✅ تم تسجيل حضورك" : "✅ تم تسجيل انصرافك";
+                if (attendanceNote !== "") displayMsg += "<br><small style='color:orange;'>⚠️ تم رصد تأخير</small>";
+                
+                statusDiv.innerHTML = displayMsg;
+                setTimeout(() => { statusDiv.innerText = ""; refreshStatus(); }, 3000);
+            } else {
+                statusDiv.innerText = "خطأ: " + error.message;
+                btn.disabled = false;
+            }
+        }, (err) => {
+            statusDiv.innerText = "يرجى تفعيل الـ GPS";
+            btn.disabled = false;
+        }, { enableHighAccuracy: true });
+    }
+
+    function logout() { localStorage.removeItem('cx_emp'); location.reload(); }
+</script>
+</body>
+</html>
