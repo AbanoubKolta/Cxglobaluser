@@ -89,11 +89,12 @@ tr.od td{background:rgba(220,38,38,.08)}
   </div>
   <div class="bar">
     <b id="count"></b>
-    <label class="sub">متأخرة بعد <input type="number" id="odDays" min="1" value="7" style="width:64px"> يوم</label>
+    <label class="sub">متأخرة بعد <input type="number" id="odDays" min="0" value="7" style="width:64px"> يوم</label>
+    <label class="sub"><input type="checkbox" id="merge" checked style="padding:0;width:auto"> دمج الفرع المتكرر</label>
     <span class="sp"></span>
     <button id="refresh">🔄 تحديث البيانات</button>
     <button id="reset">إعادة ضبط</button>
-    <button id="csv">⬇ تصدير CSV</button>
+    <button id="xlsx">⬇ تصدير Excel</button>
   </div>
 </div>
 <details class="panel" open><summary><b>📊 رسوم بيانية</b></summary><div class="charts" id="charts"></div></details>
@@ -132,24 +133,41 @@ async function fetchRows(){
 const COLS=[["id","رقم التذكرة"],["branch","الفرع"],["country","المحافظة"],["segment","المنطقة"],["phone","التليفون"],["status","الحالة"],["created","التاريخ"],["project","المشروع"],["visitor","الزائر / المتصل"],["notes","ملاحظات"]];
 const SC={"Completed":"--c-Completed","Pending Spare Parts":"--c-Pending","In Progress":"--c-Progress","Fixed":"--c-Fixed","Resolved Remotely":"--c-Remote","Closed":"--c-Closed","Cancelled":"--c-Cancelled"};
 let rows=[],sig="",busy=false,lastOk=null,failed=false,fails=0;
-const st={sort:"created",dir:-1,page:0,status:"",overdue:false};
+const st={sort:"created",dir:-1,page:0,status:"",overdue:false,merge:true};
+try{const v=localStorage.getItem("merge");if(v!==null)$("merge").checked=v==="1"}catch(e){}
+st.merge=$("merge").checked;
 try{const v=localStorage.getItem("odDays");if(v)$("odDays").value=v}catch(e){}
 const CLOSED=new Set(["Completed","Fixed","Closed","Cancelled","Resolved Remotely"]);
 const ageDays=r=>{const m=/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/.exec(r.created||"");if(!m)return 0;return Math.max(0,Math.floor((Date.now()-new Date(+m[1],m[2]-1,+m[3]))/864e5))};
-const limit=()=>Math.max(1,+$("odDays").value||7);
-const isOver=r=>!CLOSED.has(r.status)&&ageDays(r)>limit();
-const odBadge=r=>isOver(r)?` <span class="odb">⏱ ${ageDays(r)} يوم</span>`:"";
+const limit=()=>{const v=$("odDays").value.trim();const n=v===""?7:Math.floor(+v);return Number.isFinite(n)?Math.max(0,n):7};
+const isOver1=r=>{if(CLOSED.has(r.status))return false;const L=limit();return L===0||ageDays(r)>L};
+const odTicket=r=>(r.all||[r]).filter(isOver1).sort((a,b)=>(a.created||"").localeCompare(b.created||""))[0];
+const isOver=r=>!!odTicket(r);
+const odBadge=r=>{const t=odTicket(r);return t?` <span class="odb">⏱ ${ageDays(t)} يوم</span>`:""};
+// دمج الفرع المتكرر: يتدمج بس لو نفس الفرع ونفس الحالة، وكل التواريخ تظهر جوه الصف
+function group(arr){
+ const m=new Map();
+ arr.forEach(r=>{const k=r.branch?r.branch+"|"+r.country+"|"+r.status:"#"+r.id;if(!m.has(k))m.set(k,[]);m.get(k).push(r)});
+ return [...m.values()].map(g=>{
+  g=g.slice().sort((a,b)=>(b.created||"").localeCompare(a.created||"")||b.id.localeCompare(a.id));
+  if(!st.merge||g.length===1)return Object.assign({},g[0],{n:g.length,all:g});
+  const j=k=>[...new Set(g.map(x=>x[k]).filter(Boolean))].join(" / ");
+  return Object.assign({},g[0],{n:g.length,all:g,id:g.map(x=>x.id).join(" / "),phone:j("phone"),project:j("project"),visitor:j("visitor"),notes:j("notes"),tags:[...new Set(g.flatMap(x=>x.tags))]});
+ });
+}
+const dateHTML=r=>r.n>1?`${r.all.map(x=>`<div>${esc(x.created)}</div>`).join("")}<span class="odb" style="background:var(--ac)">×${r.n} تذاكر</span>${odBadge(r)}`:`${esc(r.created)}${odBadge(r)}`;
 const phoneHTML=r=>r.phone?`<a href="tel:${esc(r.phone)}">${esc(r.phone)}</a> <a href="https://wa.me/2${esc(r.phone)}" target="_blank" rel="noopener">💬</a>`:"—";
 function cardHTML(r){const c=`var(${SC[r.status]||"--c-Closed"})`;
  return `<div class="card ${isOver(r)?"od":""}" style="--b:${c}"><div class="t"><b>${esc(r.branch)||"—"}</b><span class="badge" style="--b:${c}">${esc(r.status)}</span></div>
  <div class="r"><span>رقم التذكرة</span><span class="id">${esc(r.id)}</span></div>
  <div class="r"><span>المحافظة / المنطقة</span><span>${esc(r.country)} / ${esc(r.segment)}</span></div>
- <div class="r"><span>التاريخ</span><span>${esc(r.created)}${odBadge(r)}</span></div>
+ <div class="r"><span>التاريخ</span><span style="text-align:end">${dateHTML(r)}</span></div>
  <div class="r"><span>المشروع</span><span>${esc(r.project)||"—"}</span></div>
  <div class="r"><span>الزائر</span><span>${esc(r.visitor)||"—"}</span></div>
  <div class="r"><span>التليفون</span><span>${phoneHTML(r)}</span></div>
  <div>${r.tags.map(t=>`<span class="tag" data-t="${esc(t)}">${esc(t)}</span>`).join("")}</div></div>`}
 function drawCharts(list,base){
+ list=list.flatMap(r=>r.all||[r]);
  const hb=items=>{const mx=Math.max(1,...items.map(i=>i[1]));return items.map(([l,n,c])=>`<div class="hb"><span class="hl" title="${esc(l)}">${esc(l)}</span><div class="ht"><i style="width:${n/mx*100}%;background:${c||"var(--ac)"}"></i></div><b>${n}</b></div>`).join("")||'<div class="sub">لا توجد بيانات</div>'};
  const top=(arr,n)=>Object.entries(arr.reduce((o,k)=>(k&&(o[k]=(o[k]||0)+1),o),{})).sort((a,b)=>b[1]-a[1]).slice(0,n);
  const stat=top(base.map(r=>r.status),12).map(([l,n])=>[l,n,`var(${SC[l]||"--c-Closed"})`]);
@@ -177,7 +195,7 @@ function filtered(skipStatus){const f=fx();return rows.filter(r=>
  (skipStatus||!f.status||r.status===f.status)&&(!f.seg||r.segment===f.seg)&&(!f.cty||r.country===f.cty)&&(!f.prj||r.project===f.prj)&&(!f.vis||r.visitor===f.vis)&&(!f.note||r.tags.includes(f.note))&&(!f.from||r.created>=f.from)&&(!f.to||r.created<=f.to)&&
  (!st.overdue||isOver(r))&&(!f.q||(r.id+r.branch+r.country+r.phone+r.notes+r.visitor).toLowerCase().includes(f.q)))}
 function render(){
- const base=filtered(true),f=fx();
+ const base=group(filtered(true)),f=fx();
  const cnt={};base.forEach(r=>cnt[r.status]=(cnt[r.status]||0)+1);
  $("kpis").innerHTML=`<div class="kpi ${!f.status?"on":""}" data-s=""><b>${base.length}</b><span>الإجمالي</span></div><div class="kpi ${st.overdue?"on":""}" data-o="1" style="--k:#dc2626"><b>${base.filter(isOver).length}</b><span>⏱ متأخرة</span></div>`+
   Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a]).map(s=>`<div class="kpi ${f.status===s?"on":""}" data-s="${esc(s)}" style="--k:var(${SC[s]||"--c-Closed"})"><b>${cnt[s]}</b><span>${esc(s)} • ${Math.round(cnt[s]/base.length*100)}%</span></div>`).join("");
@@ -187,9 +205,9 @@ function render(){
  const ps=+$("psize").value,pages=Math.max(1,Math.ceil(list.length/ps));st.page=Math.min(st.page,pages-1);
  $("head").innerHTML=COLS.map(([c,l])=>`<th data-c="${c}" class="${st.sort===c?"s":""}" data-d="${st.dir>0?"▲":"▼"}">${l}</th>`).join("");
  const pageRows=list.slice(st.page*ps,st.page*ps+ps);
- $("body").innerHTML=pageRows.length?pageRows.map(r=>`<tr class="${isOver(r)?"od":""}"><td class="id">${esc(r.id)}</td><td>${esc(r.branch)}</td><td>${esc(r.country)}</td><td>${esc(r.segment)}</td>
+ $("body").innerHTML=pageRows.length?pageRows.map(r=>`<tr class="${isOver(r)?"od":""}"><td class="id">${esc(r.id).split(" / ").join("<br>")}</td><td>${esc(r.branch)}</td><td>${esc(r.country)}</td><td>${esc(r.segment)}</td>
  <td>${r.phone?`<a href="tel:${esc(r.phone)}">${esc(r.phone)}</a> <a href="https://wa.me/2${esc(r.phone.replace(/^0/,"0"))}" target="_blank" rel="noopener" title="WhatsApp">💬</a>`:"—"}</td>
- <td><span class="badge" style="--b:var(${SC[r.status]||"--c-Closed"})">${esc(r.status)}</span></td><td>${esc(r.created)}${odBadge(r)}</td><td>${esc(r.project)||"—"}</td><td>${esc(r.visitor)||"—"}</td>
+ <td><span class="badge" style="--b:var(${SC[r.status]||"--c-Closed"})">${esc(r.status)}</span></td><td>${dateHTML(r)}</td><td>${esc(r.project)||"—"}</td><td>${esc(r.visitor)||"—"}</td>
  <td>${r.tags.map(t=>`<span class="tag" data-t="${esc(t)}">${esc(t)}</span>`).join("")}</td></tr>`).join(""):`<tr><td colspan="10" class="empty">مفيش نتائج</td></tr>`;
  $("pinfo").textContent=`صفحة ${st.page+1} من ${pages}`;
  $("prev").disabled=st.page===0;$("next").disabled=st.page>=pages-1;
@@ -211,6 +229,40 @@ async function refresh(manual){
   setSub();
  }finally{busy=false;btn.textContent="🔄 تحديث البيانات"}
 }
+// ===== تصدير Excel (.xlsx) بدون أي مكتبة خارجية =====
+function crc32(b){let t=crc32.t,c;if(!t){t=crc32.t=[];for(let n=0;n<256;n++){c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}}c=-1;for(let i=0;i<b.length;i++)c=t[(c^b[i])&255]^(c>>>8);return(c^-1)>>>0}
+function zipStore(files){
+ const enc=new TextEncoder(),parts=[],cen=[];let off=0;
+ const u16=n=>[n&255,(n>>8)&255],u32=n=>[n&255,(n>>8)&255,(n>>16)&255,(n>>>24)&255];
+ files.forEach(([name,data])=>{
+  const nb=enc.encode(name),db=enc.encode(data),crc=crc32(db);
+  const lh=Uint8Array.from([...u32(0x04034b50),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(crc),...u32(db.length),...u32(db.length),...u16(nb.length),...u16(0)]);
+  const ch=Uint8Array.from([...u32(0x02014b50),...u16(20),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(crc),...u32(db.length),...u32(db.length),...u16(nb.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(off)]);
+  parts.push(lh,nb,db);cen.push(ch,nb);off+=lh.length+nb.length+db.length;
+ });
+ const cdSize=cen.reduce((a,x)=>a+x.length,0);
+ const end=Uint8Array.from([...u32(0x06054b50),...u16(0),...u16(0),...u16(files.length),...u16(files.length),...u32(cdSize),...u32(off),...u16(0)]);
+ return new Blob([...parts,...cen,end],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+}
+function makeXlsx(head,data,widths){
+ const X=v=>String(v??"").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+ const L=i=>String.fromCharCode(65+i);
+ const cell=(v,r,c,s)=>`<c r="${L(c)}${r}" t="inlineStr" s="${s}"><is><t xml:space="preserve">${X(v)}</t></is></c>`;
+ const rowsXml=[head,...data].map((row,ri)=>`<row r="${ri+1}">${row.map((v,ci)=>cell(v,ri+1,ci,ri?2:1)).join("")}</row>`).join("");
+ const last=`${L(head.length-1)}${data.length+1}`;
+ const sheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${last}"/><sheetViews><sheetView rightToLeft="1" workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${widths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join("")}</cols><sheetData>${rowsXml}</sheetData><autoFilter ref="A1:${last}"/></worksheet>`;
+ const styles=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF2563EB"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+ const H='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+ return zipStore([
+  ["[Content_Types].xml",H+'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'],
+  ["_rels/.rels",H+'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+  ["xl/workbook.xml",H+'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Tickets" sheetId="1" r:id="rId1"/></sheets></workbook>'],
+  ["xl/_rels/workbook.xml.rels",H+'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
+  ["xl/styles.xml",styles],
+  ["xl/worksheets/sheet1.xml",sheet]
+ ]);
+}
+
 const go=()=>{st.page=0;render()};
 ["q","fStatus","fSegment","fCountry","fProject","fVisitor","fNote","dFrom","dTo","psize"].forEach(i=>$(i).addEventListener("input",go));
 $("kpis").onclick=e=>{const k=e.target.closest(".kpi");if(!k)return;if(k.dataset.o){st.overdue=!st.overdue}else{st.overdue=false;$("fStatus").value=k.dataset.s}go()};
@@ -218,12 +270,15 @@ $("head").onclick=e=>{const c=e.target.closest("th")?.dataset.c;if(!c)return;st.
 $("body").onclick=e=>{const t=e.target.dataset.t;if(t){$("fNote").value=t;go()}};
 $("cards").onclick=$("body").onclick;
 $("odDays").addEventListener("input",()=>{try{localStorage.setItem("odDays",$("odDays").value)}catch(e){}go()});
+$("merge").addEventListener("change",()=>{st.merge=$("merge").checked;try{localStorage.setItem("merge",st.merge?"1":"0")}catch(e){}go()});
 $("prev").onclick=()=>{st.page--;render()};$("next").onclick=()=>{st.page++;render()};
 $("refresh").onclick=()=>refresh(true);
 $("reset").onclick=()=>{st.overdue=false;document.querySelectorAll(".filters input,.filters select").forEach(x=>x.value="");$("psize").value="50";go()};
-$("csv").onclick=()=>{const q=v=>`"${String(v||"").replace(/"/g,'""')}"`;
- const t="\ufeff"+COLS.map(c=>q(c[1])).join(",")+"\n"+window._list.map(r=>COLS.map(c=>q(r[c[0]])).join(",")).join("\n");
- const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([t],{type:"text/csv;charset=utf-8"}));a.download="tickets_filtered.csv";a.click()};
+$("xlsx").onclick=()=>{
+ const head=COLS.map(c=>c[1]);
+ const data=(window._list||[]).map(r=>COLS.map(([k])=>k==="created"&&r.n>1?r.all.map(x=>x.created).join("\n"):k==="id"?String(r.id).split(" / ").join("\n"):r[k]||""));
+ const d=new Date(),name=`tickets_${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}.xlsx`;
+ const a=document.createElement("a");a.href=URL.createObjectURL(makeXlsx(head,data,[18,22,14,16,16,18,22,18,18,30]));a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),5000)};
 $("theme").onclick=()=>{const d=document.documentElement,dark=getComputedStyle(d).getPropertyValue("--bg").trim()==="#12151b";d.dataset.theme=dark?"light":"dark"};
 await refresh();
 setInterval(()=>{if(!document.hidden)refresh()},REFRESH_MS);
