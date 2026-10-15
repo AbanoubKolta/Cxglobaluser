@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>CAFM Tickets Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%93%8B%3C/text%3E%3C/svg%3E">
 <style>
 :root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
 --bg:#f5f6f8;--card:#fff;--tx:#1b1f27;--mu:#6b7280;--bd:#e3e6eb;--ac:#2563eb;--acbg:#e8efff;
@@ -107,7 +108,17 @@ const REFRESH_MS=30000; // التحديث التلقائي كل 30 ثانية
 $("body").innerHTML='<tr><td colspan="10" class="empty">جارٍ تحميل البيانات من Google Sheets...</td></tr>';
 const SHEET_GVIZ_URL="https://docs.google.com/spreadsheets/d/1Dfx74MNE-aSh4TxMMoBkN9GLCsYpuIQGM32z0zy_fD0/gviz/tq?tqx=out:json";
 function loadSheetJSONP(){return new Promise((resolve,reject)=>{let done=false;const timer=setTimeout(()=>finish(new Error("انتهت مهلة الاتصال بجدول Google Sheets")),20000);function finish(err,value){if(done)return;done=true;clearTimeout(timer);delete window.google;if(script.parentNode)script.parentNode.removeChild(script);err?reject(err):resolve(value)}const script=document.createElement("script");window.google={visualization:{Query:{setResponse:data=>finish(null,data)}}};script.src=SHEET_GVIZ_URL+"&_="+Date.now();script.onerror=()=>finish(new Error("تعذر الوصول إلى Google Sheets"));document.head.appendChild(script)});}
-function cellValue(cell){let v=cell?.v??"";if(v instanceof Date){const y=v.getFullYear(),m=String(v.getMonth()+1).padStart(2,"0"),d=String(v.getDate()).padStart(2,"0");return `${y}/${m}/${d}`}return String(v)}
+const p2=n=>String(n).padStart(2,"0");
+function normDate(t){let m=/^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})/.exec(t);if(m)return `${m[1]}/${p2(m[2])}/${p2(m[3])}`;m=/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/.exec(t);if(m)return `${m[3]}/${p2(m[2])}/${p2(m[1])}`;return t}
+function cellValue(cell){
+ let v=cell?.v??"";
+ // التاريخ: نستخدم النص المنسّق كما يظهر في الشيت (f) لتجنب مشكلة الشهر (gviz يعدّ الأشهر من 0)
+ if(v instanceof Date||/^Date\(/.test(String(v))){
+  if(cell.f)return normDate(String(cell.f).trim());
+  if(v instanceof Date)return `${v.getFullYear()}/${p2(v.getMonth()+1)}/${p2(v.getDate())}`;
+  const m=/^Date\((\d+),(\d+),(\d+)/.exec(v);return m?`${m[1]}/${p2(+m[2]+1)}/${p2(m[3])}`:String(v);
+ }
+ return String(v)}
 const aliases=[["ticketid"],["branch"],["country"],["segment"],["phone"],["status"],["created"],["project"],["visitor / contacted","visitor","contacted"],["notes"]];
 async function fetchRows(){
  const response=await loadSheetJSONP();
@@ -120,7 +131,7 @@ async function fetchRows(){
 }
 const COLS=[["id","رقم التذكرة"],["branch","الفرع"],["country","المحافظة"],["segment","المنطقة"],["phone","التليفون"],["status","الحالة"],["created","التاريخ"],["project","المشروع"],["visitor","الزائر / المتصل"],["notes","ملاحظات"]];
 const SC={"Completed":"--c-Completed","Pending Spare Parts":"--c-Pending","In Progress":"--c-Progress","Fixed":"--c-Fixed","Resolved Remotely":"--c-Remote","Closed":"--c-Closed","Cancelled":"--c-Cancelled"};
-let rows=[],sig="",busy=false,lastOk=null,failed=false;
+let rows=[],sig="",busy=false,lastOk=null,failed=false,fails=0;
 const st={sort:"created",dir:-1,page:0,status:"",overdue:false};
 try{const v=localStorage.getItem("odDays");if(v)$("odDays").value=v}catch(e){}
 const CLOSED=new Set(["Completed","Fixed","Closed","Cancelled","Resolved Remotely"]);
@@ -190,12 +201,12 @@ function render(){
 async function refresh(manual){
  if(busy)return;busy=true;const btn=$("refresh");if(manual)btn.textContent="⏳ جارٍ التحديث...";
  try{
-  const nr=await fetchRows();lastOk=new Date();failed=false;
+  const nr=await fetchRows();lastOk=new Date();failed=false;fails=0;
   const s=JSON.stringify(nr);
   if(s!==sig){sig=s;rows=nr;buildFilters();render()}
   setSub();
  }catch(err){
-  console.error(err);failed=true;
+  console.error(err);fails++;failed=fails>=2;if(fails<3)setTimeout(()=>refresh(),5000);
   if(!rows.length){$("body").innerHTML='<tr><td colspan="10" class="empty">تعذر تحميل البيانات من Google Sheets. تحقق من اتصال الإنترنت وصلاحية مشاركة الجدول، وسيعاد المحاولة تلقائيًا.</td></tr>';$("count").textContent="فشل تحميل البيانات"}
   setSub();
  }finally{busy=false;btn.textContent="🔄 تحديث البيانات"}
